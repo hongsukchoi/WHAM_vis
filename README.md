@@ -1,3 +1,12 @@
+# Quick commands
+
+```
+python demo.py --video examples/IMG_9732.mov --save-pkl
+
+python global_viser_vis.py --result_pkl output/demo/IMG_9732/wham_output.pkl
+```
+
+
 # WHAM: Reconstructing World-grounded Humans with Accurate 3D Motion
 
 <a href="https://pytorch.org/get-started/locally/"><img alt="PyTorch" src="https://img.shields.io/badge/PyTorch-ee4c2c?logo=pytorch&logoColor=white"></a> [![report](https://img.shields.io/badge/arxiv-report-red)](https://arxiv.org/abs/2312.07531) <a href="https://wham.is.tue.mpg.de/"><img alt="Project" src="https://img.shields.io/badge/-Project%20Page-lightgrey?logo=Google%20Chrome&color=informational&logoColor=white"></a> [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1ysUtGSwidTQIdBQRhq0hj63KbseFujkn?usp=sharing)
