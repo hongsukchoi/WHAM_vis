@@ -3,6 +3,7 @@ import yaml
 import torch
 import tyro
 import viser
+import imageio
 import numpy as onp
 import joblib
 import time
@@ -22,18 +23,7 @@ def build_body_model(device, batch_size=1, gender='neutral', **kwargs):
     sys.stdout = sys.__stdout__
     return body_model
 
-@server.on_client_connect
-def _(client: viser.ClientHandle) -> None:
-    print("new client!")
 
-    # This will run whenever we get a new camera!
-    @client.camera.on_update
-    def _(_: viser.CameraHandle) -> None:
-        print(f"New camera on client {client.client_id}!")
-
-    # Show the client ID in the GUI.
-    gui_info = client.gui.add_text("Client ID", initial_value=str(client.client_id))
-    gui_info.disabled = True
     
 def main(sid: int = 0):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -42,7 +32,11 @@ def main(sid: int = 0):
 
     # load slam and wham results from ./output/demo/jump/
     # slam_results = joblib.load('./output/demo/jump/slam_results.pth') # trans: xyz, qaut: xyzw
-    wham_results = joblib.load('./output/demo/jump/wham_output.pkl')
+
+    # wham_results = joblib.load('./output/demo/jump/wham_output.pkl')
+    # wham_results = joblib.load('./output/demo/IMG_9732/wham_output.pkl')
+    # wham_results = joblib.load('./output/demo/moving_cam/wham_output.pkl')
+    wham_results = joblib.load('./output/demo/walk-2/wham_output.pkl')
 
     # extract vertices from wham results
     global_output = smpl.get_output(
@@ -56,27 +50,75 @@ def main(sid: int = 0):
     # set the ground to be the minimum y value
     ground_y = global_verts[..., 1].min()
     global_verts[..., 1] = global_verts[..., 1] - ground_y
-    # slam_results[..., 1] = slam_results[..., 1] - ground_y
 
 
     timesteps = len(global_verts)
 
     # setup viser server
     server = viser.ViserServer()
-    import pdb; pdb.set_trace()
     server.scene.world_axes.visible = True
-    # server.scene.set_up_direction("+y")
-    server.scene.add_grid("ground", width=10, height=10, cell_size=0.5, plane="xz")
+    server.scene.add_grid("ground", width=35, height=35, cell_size=1, plane="xz")
 
-    clients = server.get_clients()
-    print("Connected client IDs", clients.keys())
+    @server.on_client_connect
+    def _(client: viser.ClientHandle) -> None:
+        print("new client!")
+
+        client.camera.position = onp.array([1.14120013, 0.60690449, 5.17581808]) # onp.array([-1, 4, 13])
+        client.camera.wxyz = onp.array([-1.75483266e-01,  9.83732196e-01 , 4.88596244e-04, 3.84233121e-02])
+            
+        # # This will run whenever we get a new camera!
+        # @client.camera.on_update
+        # def _(_: viser.CameraHandle) -> None:
+        #     print(f"New camera on client {client.client_id}!")
+        #     print(f"Camera pose for client {id}")
+        #     print(f"\tfov: {client.camera.fov}")
+        #     print(f"\taspect: {client.camera.aspect}")
+        #     print(f"\tlast update: {client.camera.update_timestamp}")
+        #     print(f"\twxyz: {client.camera.wxyz}")
+        #     print(f"\tposition: {client.camera.position}")
+        #     print(f"\tlookat: {client.camera.look_at}")
+            
+        # Show the client ID in the GUI.
+        gui_info = client.gui.add_text("Client ID", initial_value=str(client.client_id))
+        gui_info.disabled = True
     
-    # rotate the mesh and camera frame around the y-axis to match the conventional camera system
-    # rotate_y_matrix = R.from_euler('y', 180, degrees=True).as_matrix()
-    # global_verts = global_verts @ rotate_y_matrix.T
+
+    # get cameras
     cam_axes_in_world = wham_results[sid]['cam_axes']
-    cam_origin_world = wham_results[sid]['cam_origin'] - ground_y
+    cam_origin_world = wham_results[sid]['cam_origin'] 
+    slam_cam_axes_in_world = wham_results[sid]['slam_cam_axes']
+    slam_cam_origin_world = wham_results[sid]['slam_cam_origin']
     
+    # match the y level
+    cam_origin_world[..., 1] = cam_origin_world[..., 1] - ground_y
+    # slam_cam_origin_world[..., 1] = slam_cam_origin_world[..., 1] - ground_y
+
+    # scale of DVPO is unknown
+    # from slam_cam_origin_world, find an index where the 3d coordinate changes
+    # then, use the scale of the first frame to scale the rest of the frames
+    diff_idx_list = [0]
+    for i in range(1, len(slam_cam_origin_world)):
+        if onp.linalg.norm(slam_cam_origin_world[i] - slam_cam_origin_world[i-1]) > 1e-3:
+            diff_idx_list.append(i)
+
+    # average the scale o
+    scale_list = []        
+    for i in range(1, len(diff_idx_list)):
+        scale = onp.linalg.norm(cam_origin_world[diff_idx_list[i-1]] - cam_origin_world[diff_idx_list[i]]) / onp.linalg.norm(slam_cam_origin_world[diff_idx_list[i-1]] - slam_cam_origin_world[diff_idx_list[i]])
+        scale_list.append(scale)
+
+    scale = onp.mean(scale_list, axis=0, keepdims=True)
+
+    slam_cam_origin_world = slam_cam_origin_world * scale
+    slam_cam_origin_world = slam_cam_origin_world - slam_cam_origin_world[0:1] + cam_origin_world[0:1]
+
+    # trick scaling
+    # cam_origin_world[..., 2] = cam_origin_world[..., 2] * 0.3
+    # slam_cam_origin_world[..., 2] = slam_cam_origin_world[..., 2] * 0.3
+
+   
+
+
     frame_nodes: list[viser.FrameHandle] = []
     for t in range(timesteps):
         # Add base frame.
@@ -90,19 +132,6 @@ def main(sid: int = 0):
             wireframe=False,
         )
         
-        """
-        # get camera poses in world
-        cam_R = wham_results[sid]['cam_R'][t]
-        # rotate around y-axis to match the conventional camera system
-        # cam_R = rotate_y_matrix @ cam_R
-        
-        cam_T = wham_results[sid]['cam_T'][t]
-        cam_axes_in_world = cam_R.T
-        cam_T_in_world = - cam_R.T @ cam_T
-        cam_T_in_world[..., 1] = cam_T_in_world[..., 1] - ground_y
-        # convert cam_axes_in_world to wxyz using scipy
-        cam_axes_in_world = R.from_matrix(cam_axes_in_world).as_quat(scalar_first=True) # wxyz
-        """
         cam_axes_matrix = cam_axes_in_world[t]
         cam_axes_quat =R.from_matrix(cam_axes_matrix).as_quat(scalar_first=True)
         
@@ -114,6 +143,19 @@ def main(sid: int = 0):
             axes_length=0.5,
             axes_radius=0.04,
         )
+        
+        slam_cam_axes_matrix = slam_cam_axes_in_world[t]
+        slam_cam_axes_quat =R.from_matrix(slam_cam_axes_matrix).as_quat(scalar_first=True)
+        
+        # server.scene.add_frame(
+        #     f"/t{t}/slam_cam",
+        #     wxyz=slam_cam_axes_quat,
+        #     position=slam_cam_origin_world[t],
+        #     show_axes=True,
+        #     axes_length=0.8,
+        #     axes_radius=0.04,
+        # )
+
 
     # Add playback UI.
     with server.gui.add_folder("Playback"):
@@ -158,6 +200,44 @@ def main(sid: int = 0):
 
     prev_timestep = gui_timestep.value
 
+    render_button = server.gui.add_button("Render motion", disabled=False)
+    recording = False
+    @render_button.on_click
+    def _(event: viser.GuiEvent) -> None:
+        nonlocal recording
+     
+        client = event.client
+        if not recording:
+            recording = True
+            gui_playing.value = False
+            gui_timestep.disabled = gui_playing.value
+            gui_next_frame.disabled = gui_playing.value
+            gui_prev_frame.disabled = gui_playing.value
+            gui_framerate.disabled = False
+            
+            # images = []
+            writer = imageio.get_writer(
+                'output.mp4', 
+                fps=gui_framerate.value, mode='I', format='FFMPEG', macro_block_size=1
+            )
+            while True:
+                if recording:
+                    gui_timestep.value = (gui_timestep.value + 1) % timesteps
+                    # images.append(client.camera.get_render(height=720, width=1280))
+                    img = client.camera.get_render(height=480, width=720)
+                    writer.append_data(img)
+                    print('recording...')
+                else:
+                    print("Recording stopped")
+                    gui_framerate.disabled = True
+                    writer.close()
+                    break
+        else:
+            recording = False
+
+        
+
+        
     # Toggle frame visibility when the timestep slider changes.
     @gui_timestep.on_update
     def _(_) -> None:

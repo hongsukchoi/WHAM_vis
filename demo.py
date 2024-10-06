@@ -14,7 +14,7 @@ from progress.bar import Bar
 from configs.config import get_cfg_defaults
 from lib.data.datasets import CustomDataset
 from lib.utils.imutils import avg_preds
-from lib.utils.transforms import matrix_to_axis_angle, axis_angle_to_matrix
+from lib.utils.transforms import matrix_to_axis_angle, axis_angle_to_matrix, quaternion_to_matrix
 from lib.models import build_network, build_body_model
 from lib.models.preproc.detector import DetectionModel
 from lib.models.preproc.extractor import FeatureExtractor
@@ -77,6 +77,7 @@ def run(cfg,
                 slam_results = slam.process()
             else:
                 slam_results = np.zeros((length, 7))
+                # Is this bug?
                 slam_results[:, 3] = 1.0    # Unit quaternion
         
             # Extract image features
@@ -142,14 +143,34 @@ def run(cfg,
             # Hongsuk
             cam_R_world = output['cam_R'].mT
             cam_origin_world = - (output['cam_R'].mT @ output['cam_T'].unsqueeze(-1)).squeeze(-1)
-                
+            
+            # Move slam results to the world coordinate
+            slam_cam_position = slam_results[:, :3] # xyz
+
+            slam_cam_quat = slam_results[:, 3:] # xyzw
+            slam_cam_quat = slam_cam_quat[:, [3, 0, 1, 2]]
+            slam_cam_matrix = quaternion_to_matrix(torch.tensor(slam_cam_quat)).float().to(output['poses_root_world'].device)
+            slam_cam_position = torch.tensor(slam_cam_position).float().to(output['poses_root_world'].device)   
+
+            # Not sure... I didn't check the slam code
+            # according this repo's code, it should be camera to world transformation
+            # so no need to inverse it
+            # slam_cam_matrix = slam_cam_matrix.unsqueeze(0).mT
+            # slam_cam_position = - (slam_cam_matrix @ slam_cam_position.unsqueeze(0).unsqueeze(-1)).squeeze(-1)
+            
             if return_y_up:
+                
                 yup2ydown = axis_angle_to_matrix(torch.tensor([[np.pi, 0, 0]])).float().to(output['poses_root_world'].device)
                 cam_R_world = yup2ydown.mT @ cam_R_world
                 cam_origin_world = (yup2ydown.mT @ cam_origin_world.unsqueeze(-1)).squeeze(-1)
                 
+                slam_cam_matrix = yup2ydown.mT @ slam_cam_matrix
+                slam_cam_position = (yup2ydown.mT @ slam_cam_position.unsqueeze(-1)).squeeze(-1)
+                
             output['cam_axes'] = cam_R_world
             output['cam_origin'] = cam_origin_world
+            output['slam_cam_axes'] = slam_cam_matrix
+            output['slam_cam_origin'] = slam_cam_position
                 
         # if False:
         if args.run_smplify:
@@ -184,6 +205,8 @@ def run(cfg,
         # results[_id]['cam_T'] = pred['cam_T'].cpu().squeeze(0).numpy()
         results[_id]['cam_axes'] = pred['cam_axes'].cpu().squeeze(0).numpy()
         results[_id]['cam_origin'] = pred['cam_origin'].cpu().squeeze(0).numpy()
+        results[_id]['slam_cam_axes'] = pred['slam_cam_axes'].cpu().squeeze(0).numpy()
+        results[_id]['slam_cam_origin'] = pred['slam_cam_origin'].cpu().squeeze(0).numpy()
     
     if save_pkl:
         joblib.dump(results, osp.join(output_pth, "wham_output.pkl"))

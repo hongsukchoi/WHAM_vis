@@ -53,6 +53,9 @@ class SLAMModel(object):
         intrinsics = torch.from_numpy(intrinsics).cuda()
         
         if self.slam is None:
+            # TEMP
+            cfg.GRADIENT_BIAS = True
+
             cfg.merge_from_file(self.dpvo_cfg)
             cfg.BUFFER_SIZE = self.buffer
             self.slam = DPVO(cfg, self.dpvo_ckpt, ht=image.shape[1], wd=image.shape[2], viz=False)
