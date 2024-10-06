@@ -14,7 +14,7 @@ from progress.bar import Bar
 from configs.config import get_cfg_defaults
 from lib.data.datasets import CustomDataset
 from lib.utils.imutils import avg_preds
-from lib.utils.transforms import matrix_to_axis_angle
+from lib.utils.transforms import matrix_to_axis_angle, axis_angle_to_matrix
 from lib.models import build_network, build_body_model
 from lib.models.preproc.detector import DetectionModel
 from lib.models.preproc.extractor import FeatureExtractor
@@ -34,7 +34,8 @@ def run(cfg,
         calib=None,
         run_global=True,
         save_pkl=False,
-        visualize=False):
+        visualize=False,
+        return_y_up=True):
     
     cap = cv2.VideoCapture(video)
     assert cap.isOpened(), f'Faild to load video file {video}'
@@ -108,13 +109,13 @@ def run(cfg,
                 # Forward pass with flipped input
                 flipped_batch = dataset.load_data(subj, True)
                 _id, x, inits, features, mask, init_root, cam_angvel, frame_id, kwargs = flipped_batch
-                flipped_pred = network(x, inits, features, mask=mask, init_root=init_root, cam_angvel=cam_angvel, return_y_up=True, **kwargs)
-                
+                flipped_pred = network(x, inits, features, mask=mask, init_root=init_root, cam_angvel=cam_angvel, return_y_up=return_y_up, **kwargs)
+
                 # Forward pass with normal input
                 batch = dataset.load_data(subj)
                 _id, x, inits, features, mask, init_root, cam_angvel, frame_id, kwargs = batch
-                pred = network(x, inits, features, mask=mask, init_root=init_root, cam_angvel=cam_angvel, return_y_up=True, **kwargs)
-                
+                pred = network(x, inits, features, mask=mask, init_root=init_root, cam_angvel=cam_angvel, return_y_up=return_y_up, **kwargs)
+
                 # Merge two predictions
                 flipped_pose, flipped_shape = flipped_pred['pose'].squeeze(0), flipped_pred['betas'].squeeze(0)
                 pose, shape = pred['pose'].squeeze(0), pred['betas'].squeeze(0)
@@ -128,16 +129,28 @@ def run(cfg,
                 network.pred_shape = avg_shape.view_as(network.pred_shape)
                 network.pred_contact = avg_contact.view_as(network.pred_contact)
                 output = network.forward_smpl(**kwargs)
-                pred = network.refine_trajectory(output, cam_angvel, return_y_up=True)
-            
+                pred = network.refine_trajectory(output, cam_angvel, return_y_up=return_y_up)
+
             else:
                 # data
                 batch = dataset.load_data(subj)
                 _id, x, inits, features, mask, init_root, cam_angvel, frame_id, kwargs = batch
                 
                 # inference
-                pred = network(x, inits, features, mask=mask, init_root=init_root, cam_angvel=cam_angvel, return_y_up=True, **kwargs)
-        
+                pred = network(x, inits, features, mask=mask, init_root=init_root, cam_angvel=cam_angvel, return_y_up=return_y_up, **kwargs)
+
+            # Hongsuk
+            cam_R_world = output['cam_R'].mT
+            cam_origin_world = - (output['cam_R'].mT @ output['cam_T'].unsqueeze(-1)).squeeze(-1)
+                
+            if return_y_up:
+                yup2ydown = axis_angle_to_matrix(torch.tensor([[np.pi, 0, 0]])).float().to(output['poses_root_world'].device)
+                cam_R_world = yup2ydown.mT @ cam_R_world
+                cam_origin_world = (yup2ydown.mT @ cam_origin_world.unsqueeze(-1)).squeeze(-1)
+                
+            output['cam_axes'] = cam_R_world
+            output['cam_origin'] = cam_origin_world
+                
         # if False:
         if args.run_smplify:
             smplify = TemporalSMPLify(smpl, img_w=width, img_h=height, device=cfg.DEVICE)
@@ -149,8 +162,8 @@ def run(cfg,
                 network.pred_shape = pred['betas']
                 network.pred_cam = pred['cam']
                 output = network.forward_smpl(**kwargs)
-                pred = network.refine_trajectory(output, cam_angvel, return_y_up=True)
-        
+                pred = network.refine_trajectory(output, cam_angvel, return_y_up=return_y_up)
+
         # ========= Store results ========= #
         pred_body_pose = matrix_to_axis_angle(pred['poses_body']).cpu().numpy().reshape(-1, 69)
         pred_root = matrix_to_axis_angle(pred['poses_root_cam']).cpu().numpy().reshape(-1, 3)
@@ -166,6 +179,11 @@ def run(cfg,
         results[_id]['betas'] = pred['betas'].cpu().squeeze(0).numpy()
         results[_id]['verts'] = (pred['verts_cam'] + pred['trans_cam'].unsqueeze(1)).cpu().numpy()
         results[_id]['frame_ids'] = frame_id
+        
+        # results[_id]['cam_R'] = pred['cam_R'].cpu().squeeze(0).numpy()
+        # results[_id]['cam_T'] = pred['cam_T'].cpu().squeeze(0).numpy()
+        results[_id]['cam_axes'] = pred['cam_axes'].cpu().squeeze(0).numpy()
+        results[_id]['cam_origin'] = pred['cam_origin'].cpu().squeeze(0).numpy()
     
     if save_pkl:
         joblib.dump(results, osp.join(output_pth, "wham_output.pkl"))
