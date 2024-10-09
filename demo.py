@@ -29,6 +29,7 @@ except:
 
 def run(cfg,
         video,
+        image_folder,
         output_pth,
         network,
         calib=None,
@@ -37,11 +38,18 @@ def run(cfg,
         visualize=False,
         return_y_up=True):
     
-    cap = cv2.VideoCapture(video)
-    assert cap.isOpened(), f'Faild to load video file {video}'
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    length = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    width, height = cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+    # image_folder is not really working; somehow Python global interpreter lock is not working during slam process
+    if image_folder is not None:
+        image_paths = sorted(glob(osp.join(image_folder, '*.jpg')))
+        length = len(image_paths)
+        width, height = cv2.imread(image_paths[0]).shape[:2]
+        fps = 30
+    else:
+        cap = cv2.VideoCapture(video)
+        assert cap.isOpened(), f'Faild to load video file {video}'
+        fps = cap.get(cv2.CAP_PROP_FPS)
+        length = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        width, height = cap.get(cv2.CAP_PROP_FRAME_WIDTH), cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
     
     # Whether or not estimating motion in global coordinates
     run_global = run_global and _run_global
@@ -54,22 +62,29 @@ def run(cfg,
             detector = DetectionModel(cfg.DEVICE.lower())
             extractor = FeatureExtractor(cfg.DEVICE.lower(), cfg.FLIP_EVAL)
             
-            if run_global: slam = SLAMModel(video, output_pth, width, height, calib)
+            if run_global: 
+                if image_folder is not None:
+                    slam = SLAMModel(image_folder, output_pth, width, height, calib)
+                else:
+                    slam = SLAMModel(video, output_pth, width, height, calib)
             else: slam = None
             
             bar = Bar('Preprocess: 2D detection and SLAM', fill='#', max=length)
-            while (cap.isOpened()):
-                flag, img = cap.read()
-                if not flag: break
-                
-                # 2D detection and tracking
-                detector.track(img, fps, length)
-                
-                # SLAM
-                if slam is not None: 
-                    slam.track()
-                
-                bar.next()
+            if image_folder is not None:
+                for img_path in image_paths:
+                    img = cv2.imread(img_path)
+                    detector.track(img, fps, length)
+                    if slam is not None: slam.track()
+                    bar.next()
+            else:
+                while (cap.isOpened()):
+                    flag, img = cap.read()
+                    if not flag: break
+                    
+                    # 2D detection and tracking
+                    detector.track(img, fps, length)
+                    if slam is not None: slam.track()
+                    bar.next()
 
             tracking_results = detector.process(fps)
             
@@ -79,10 +94,14 @@ def run(cfg,
                 slam_results = np.zeros((length, 7))
                 # Is this bug?
                 slam_results[:, 3] = 1.0    # Unit quaternion
-        
+            logger.info('2D detection and SLAM complete!')
+
             # Extract image features
             # TODO: Merge this into the previous while loop with an online bbox smoothing.
-            tracking_results = extractor.run(video, tracking_results)
+            if image_folder is not None:
+                tracking_results = extractor.run(image_paths, tracking_results)
+            else:   
+                tracking_results = extractor.run(video, tracking_results)
             logger.info('Complete Data preprocessing!')
             
             # Save the processed data
@@ -215,6 +234,8 @@ def run(cfg,
     if visualize:
         from lib.vis.run_vis import run_vis_on_demo
         with torch.no_grad():
+            # TEMP
+            run_global = False
             run_vis_on_demo(cfg, video, results, output_pth, network.smpl, vis_global=run_global)
         
 if __name__ == '__main__':
@@ -223,6 +244,10 @@ if __name__ == '__main__':
     parser.add_argument('--video', type=str, 
                         default='examples/demo_video.mp4', 
                         help='input video path or youtube link')
+
+    parser.add_argument('--image_folder', type=str, 
+                        default=None, #'examples/demo_images', 
+                        help='input image folder path')
 
     parser.add_argument('--output_pth', type=str, default='output/demo', 
                         help='output folder to write results')
@@ -263,6 +288,7 @@ if __name__ == '__main__':
     
     run(cfg, 
         args.video, 
+        args.image_folder, 
         output_pth, 
         network, 
         args.calib, 

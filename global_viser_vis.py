@@ -25,7 +25,7 @@ def build_body_model(device, batch_size=1, gender='neutral', **kwargs):
 
 
     
-def main(sid: int = 0):
+def main(sid: int = 0, result_pkl: str = None):
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     smpl = build_body_model(device)
     smpl_faces = smpl.faces
@@ -36,8 +36,9 @@ def main(sid: int = 0):
     # wham_results = joblib.load('./output/demo/jump/wham_output.pkl')
     # wham_results = joblib.load('./output/demo/IMG_9732/wham_output.pkl')
     # wham_results = joblib.load('./output/demo/moving_cam/wham_output.pkl')
-    wham_results = joblib.load('./output/demo/walk-2/wham_output.pkl')
-
+    # wham_results = joblib.load('./output/demo/walk-2/wham_output.pkl')
+    wham_results = joblib.load(result_pkl)
+    
     # extract vertices from wham results
     global_output = smpl.get_output(
         body_pose=torch.tensor(wham_results[sid]['pose_world'][:, 3:]).to(device), 
@@ -50,7 +51,6 @@ def main(sid: int = 0):
     # set the ground to be the minimum y value
     ground_y = global_verts[..., 1].min()
     global_verts[..., 1] = global_verts[..., 1] - ground_y
-
 
     timesteps = len(global_verts)
 
@@ -96,8 +96,9 @@ def main(sid: int = 0):
     # scale of DVPO is unknown
     # from slam_cam_origin_world, find an index where the 3d coordinate changes
     # then, use the scale of the first frame to scale the rest of the frames
+    # Doesn't work for multiple people
     diff_idx_list = [0]
-    for i in range(1, len(slam_cam_origin_world)):
+    for i in range(1, len(cam_axes_in_world)):
         if onp.linalg.norm(slam_cam_origin_world[i] - slam_cam_origin_world[i-1]) > 1e-3:
             diff_idx_list.append(i)
 

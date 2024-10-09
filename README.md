@@ -1,9 +1,15 @@
 # Quick commands
 
 ```
+# Single / Multi person rendering to video
 python demo.py --video examples/IMG_9732.mov --save-pkl
 
-python global_viser_vis.py --result_pkl output/demo/IMG_9732/wham_output.pkl
+# single person 3D visualization in Viser
+python global_viser_vis.py  --result_pt ./outputs/demo/jump/hmr4d_results.pt
+
+# multi person 3D visualization in Viser
+python mp_global_viser_vis.py  --result_pkl ./output/demo/024159_mpii_test/wham_output.pkl 
+
 ```
 
 
